@@ -1,3 +1,29 @@
+const devScenes = {
+  "village": {
+    "intro": { "label": "阿嬤開場", "leaves": 0 }
+  },
+  "tea-garden": {
+    "entrance": { "label": "梯田入口", "leaves": 0 },
+    "pick": { "label": "採摘嫩梢", "leaves": 0 },
+    "return": { "label": "採滿回茶寮", "leaves": 18 }
+  },
+  "tea-room": {
+    "scoop": { "label": "茶勺放乾茶葉", "leaves": 18, "phase": "leaves" },
+    "water": { "label": "水壺倒水", "leaves": 18, "phase": "water" },
+    "steep": { "label": "浸泡", "leaves": 18, "phase": "steep" },
+    "pour": { "label": "茶壺倒入茶杯", "leaves": 18, "phase": "cup" },
+    "serve": { "label": "奉茶給阿嬤", "leaves": 18, "phase": "serve" }
+  },
+  "chapter-end": {
+    "award": { "label": "領取紀念幣", "leaves": 18, "coins": 1 },
+    "ending": { "label": "章末對話", "leaves": 18, "coins": 1 },
+    "coins": { "label": "紀念幣圖鑑", "leaves": 18, "coins": 1 },
+    "story": { "label": "故事頁", "leaves": 0 }
+  }
+};
+
+
+
 function basketPixels(count, capacity = 18) {
   const columns = Array(12).fill(0);
   const clusters = [];
@@ -120,31 +146,41 @@ async function createScene() {
     x: random(), y: random(), phase: random() * Math.PI * 2, size: 4 + 20 * random()
   }));
 
+  const artWarnings = new Set();
+  const pixelDev = location.protocol === "file:" || ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname) ||
+    new URLSearchParams(location.search).get("dev") === "1";
+
   function image(source) {
     return new Promise((resolve, reject) => {
       const result = new Image();
-      result.onload = () => resolve(result);
+      result.onload = () => {
+        if (pixelDev && (result.naturalWidth > 480 || result.naturalHeight > 270)) {
+          artWarnings.add(source);
+          let warning = document.querySelector("#pixel-art-warning");
+          if (!warning) {
+            warning = document.createElement("output");
+            warning.id = "pixel-art-warning";
+            document.body.append(warning);
+          }
+          warning.textContent = "像素規格待遷移：" + [...artWarnings].join("、");
+        }
+        resolve(result);
+      };
       result.onerror = reject;
       result.src = source;
     });
   }
 
   let backdrop;
-  let hero;
   let garden;
-  let fieldHero;
-  let walkSheet;
-  let hatWalkSheet;
-  let hatBack;
+  let playerBase;
+  let playerSheets;
   try {
-    [backdrop, hero, garden, fieldHero, walkSheet, hatWalkSheet, hatBack] = await Promise.all([
+    [backdrop, garden, playerBase, ...playerSheets] = await Promise.all([
       image("scene-sluice.png"),
-      image("qinghe.png"),
       image("hillside-tea.png"),
-      image("qinghe-field.png"),
-      image("qinghe-walk.png"),
-      image("qinghe-hat-walk.png"),
-      image("qinghe-hat-back.png")
+      image(playerArt.base),
+      ...Object.values(playerArt.sheets).map(path => image(path).catch(() => null))
     ]);
   } catch {
     status.textContent = "場景素材未載入。請確認圖片和網頁放在同一個資料夾。";
@@ -159,6 +195,7 @@ async function createScene() {
   const panelLine = document.querySelector("#chapter-line");
   const controls = document.querySelector("#chapter-actions");
   const targets = document.querySelector("#scene-targets");
+  const gardenGuide = document.querySelector("#garden-guide");
   const main = canvas.closest("main");
   const toolbar = document.querySelector(".scene-controls");
   if (typeof ResizeObserver === "function") {
@@ -170,7 +207,6 @@ async function createScene() {
     { x: .42, y: .645 }, { x: .51, y: .64 }, { x: .60, y: .635 }
   ];
   const actor = { x: .5, y: .77, facing: "front" };
-  const walkFrames = [175, 675, 1175, 1675];
   let stage = "intro";
   let effect;
   let busy = false;
@@ -581,7 +617,7 @@ async function createScene() {
     }
     if (stage === "garden") {
       const done = crops.every(crop => crop.done);
-      showGardenPanel(done ? "春茶採好了。帶嫩葉回茶寮找阿嬤。" : "點金色標記，採三株茶的嫩葉。");
+      showGardenPanel(done ? "春茶採好了。帶嫩葉回茶寮找阿嬤。" : "點茶株標記，走近採摘。");
       return;
     }
     if (stage === "complete") {
@@ -688,12 +724,12 @@ async function createScene() {
       button.className = "scene-target";
       button.dataset.kind = "pick";
       button.setAttribute("aria-label", `採第 ${index + 1} 株茶`);
-      button.textContent = "✦";
+      button.innerHTML = "<span class=\"interaction-marker\" aria-hidden=\"true\"><span>✦</span></span>";
       button.addEventListener("click", () => tend(crop));
       targets.append(button);
       return button;
     });
-    showGardenPanel("春茶正好。到金色標記的茶株旁，親手採下嫩梢。");
+    showGardenPanel("春茶正好，採三株嫩梢。");
     render();
   }
 
@@ -716,9 +752,10 @@ async function createScene() {
     const endX = crop.x - .026;
     const startY = actor.y;
     const endY = .785;
-    actor.facing = endX < startX ? "left" : "right";
+    actor.facing = Math.abs(endX - startX) > Math.abs(endY - startY) ? (endX < startX ? "left" : "right") : (endY < startY ? "back" : "front");
     effect = { kind: "walk", amount: 0, crop };
-    tween(300 + Math.hypot((endX - startX) * 3250, (endY - startY) * 2450), amount => {
+    tween(190 + Math.hypot((endX - startX) * 3250, (endY - startY) * 2450), progress => {
+      const amount = progress * progress * (3 - 2 * progress);
       actor.x = startX + (endX - startX) * amount;
       actor.y = startY + (endY - startY) * amount;
       viewCenter = startCenter;
@@ -789,23 +826,45 @@ async function createScene() {
     });
   }
 
-  const scoopLeaves = Array.from({ length: 24 }, (_, index) => ({
-    x: 9 + index % 6 * 4 + (index * 7 % 3),
-    y: 30 + Math.floor(index / 6) * 3 - index % 6 * 2,
-    release: index * 59 + index * 17 % 19
-  }));
+  const dryTeaPalette = ["#211610", "#36241a", "#563827", "#795137"];
+  const dryTeaGroups = [3, 2, 4, 3, 3, 4, 2, 3, 4, 3, 2, 3];
+  let dryTeaTime = 130;
+  const scoopLeaves = dryTeaGroups.flatMap((size, group) => {
+    const release = dryTeaTime;
+    dryTeaTime += 55 + group * 23 % 35;
+    return Array.from({ length: size }, (_, index) => {
+      const n = group * 4 + index;
+      const angle = n * 2.399963;
+      const radius = Math.sqrt((n + .5) / 48);
+      return {
+        x: Math.round(17 + radius * (10 * Math.cos(angle) - 8 * Math.sin(angle))),
+        y: Math.round(28 + radius * (10 * Math.sin(angle) - 8 * Math.cos(angle))),
+        release, n
+      };
+    });
+  });
+
+  function dryTeaPixel(context, x, y, n, angle) {
+    const length = 3 + n % 3;
+    for (let j = 0; j < length; j += 1) {
+      const dx = j - (length - 1) / 2;
+      const dy = j === 0 || j === length - 1 ? 0 : (n % 2 ? 1 : -1);
+      const px = x + Math.round(dx * Math.cos(angle) - dy * Math.sin(angle));
+      const py = y + Math.round(dx * Math.sin(angle) + dy * Math.cos(angle));
+      context.fillStyle = dryTeaPalette[j === 0 ? 0 : j === 2 && n % 3 === 0 ? 3 : 1 + n % 2];
+      context.fillRect(px, py, 1, 1);
+    }
+  }
 
   function drawScoop(time = -200) {
     scoopCanvas.clearRect(0, 0, 48, 45);
-    scoopLeaves.forEach((leaf, index) => {
-      if (time >= leaf.release) return;
-      const slide = Math.max(0, 1 - (leaf.release - time) / 165);
-      const x = Math.round(leaf.x + (9 - leaf.x) * slide);
+    for (const leaf of scoopLeaves) {
+      if (time >= leaf.release) continue;
+      const slide = Math.max(0, 1 - (leaf.release - time) / 125);
+      const x = Math.round(leaf.x + (10 - leaf.x) * slide);
       const y = Math.round(leaf.y + (38 - leaf.y) * slide);
-      scoopCanvas.fillStyle = ["#60842f", "#9ab247", "#476523"][index % 3];
-      scoopCanvas.fillRect(x, y, 3, 1);
-      scoopCanvas.fillRect(x + 1, y - 1, 2, 3);
-    });
+      dryTeaPixel(scoopCanvas, x, y, leaf.n, leaf.n * .71 + slide * .2);
+    }
   }
 
   function drawSteam(now) {
@@ -891,10 +950,12 @@ async function createScene() {
     if (tea.phase !== "steep" && !pouring) teaEffects.clearRect(0, 0, 480, 270);
     drawCup(tea.phase === "serve" ? 3 : 0);
     if (tea.phase === "leaves") drawScoop();
+    teaInstruction.hidden = false;
     teaInstruction.textContent = message ?? instruction;
     for (const object of teaTable.querySelectorAll("[data-object]")) {
       object.dataset.pickable = String(object.dataset.object === source);
       object.dataset.destination = String(object.dataset.object === target);
+      object.dataset.guide = object.dataset.object === source ? "active" : "pending";
     }
   }
 
@@ -998,7 +1059,7 @@ async function createScene() {
     const lipY = dx * Math.sin(radians) + dy * Math.cos(radians);
     const clearance = Math.max(14, scene.height * .16);
     const aligned = { x: receiver.x - center.x - lipX, y: receiver.y - clearance - center.y - lipY };
-    const flowTime = phase === "leaves" ? 1740 : 1250;
+    const flowTime = phase === "leaves" ? 1260 : 1250;
     const alignTime = 340;
     const returnTime = 340;
     let start;
@@ -1018,18 +1079,24 @@ async function createScene() {
       const top = gridY - fall;
       if (phase === "leaves") {
         drawScoop(time);
-        for (const [i, leaf] of scoopLeaves.entries()) {
-          const age = (time - leaf.release) / (210 + i * 17 % 80);
-          if (age < 0 || age >= 1) continue;
-          const x = gridX + Math.round(Math.sin(i * 19) * 7 * age);
-          const y = top + Math.round(age * age * fall);
-          teaEffects.globalAlpha = age < .85 ? 1 : .45;
-          teaEffects.fillStyle = ["#416428", "#71953b", "#94b54e"][i % 3];
-          const tilt = (i + Math.floor(age * 5)) % 3 - 1;
-          teaEffects.fillRect(x, y, 2, 1);
-          teaEffects.fillRect(x + tilt, y + 1, 3, 1);
+        for (const leaf of scoopLeaves) {
+          const age = time - leaf.release;
+          const duration = 165 + leaf.n * 17 % 46;
+          if (age < 0 || age >= duration + 110) continue;
+          const x = gridX + (leaf.n * 13 % 9 - 4);
+          if (age < duration) {
+            const p = age / duration;
+            const y = top + Math.round(p * p * fall);
+            if (y < gridY - 1) dryTeaPixel(teaEffects, x, Math.min(y, gridY - 4), leaf.n, leaf.n * .71 + p * .36);
+          } else if (leaf.n % 4 === 0) {
+            const dust = age - duration;
+            teaEffects.globalAlpha = dust < 45 ? .65 : .28;
+            teaEffects.fillStyle = "#bf956e";
+            teaEffects.fillRect(x - 1, gridY - 2 - Math.floor(dust / 40), 1, 1);
+            teaEffects.fillRect(x + 1, gridY - 3, 1, 1);
+            teaEffects.globalAlpha = 1;
+          }
         }
-        teaEffects.globalAlpha = 1;
         return;
       }
       const cycle = Math.floor(time / 80) % 3;
@@ -1106,6 +1173,7 @@ async function createScene() {
 
   harvest.addEventListener("close", () => {
     handRun += 1;
+    delete harvestScene.dataset.reaching;
     for (const hand of Object.values(hands)) {
       hand.busy = false;
       hand.leaf.hidden = true;
@@ -1144,7 +1212,7 @@ async function createScene() {
   }
 
   function setHarvestGrip(hand, gripping) {
-    hand.image.src = gripping ? "harvest-grip-clean.png" : "harvest-reach-clean.png";
+    hand.image.src = gripping ? playerArt.harvest.grip : playerArt.harvest.reach;
   }
 
   function harvestArmPose(hand, position, width, height) {
@@ -1188,7 +1256,10 @@ async function createScene() {
   }
 
   function showHarvestCounts() {
-    harvestInstruction.textContent = `點左邊用左手，點右邊用右手。已入簍 ${pickingCrop.shoots.size}／6。`;
+    harvestInstruction.textContent = `點亮框裡的嫩梢採摘。已入簍 ${pickingCrop.shoots.size}／6。`;
+    harvestInstruction.hidden = pickingCrop.shoots.size === shoots.length;
+    const next = shoots.find(shoot => !shoot.hidden && !shoot.disabled);
+    for (const shoot of shoots) shoot.dataset.guide = shoot === next ? "active" : "pending";
   }
 
   for (const shoot of shoots) shoot.addEventListener("click", event => {
@@ -1205,6 +1276,7 @@ async function createScene() {
     }
     hand.busy = true;
     shoot.disabled = true;
+    harvestScene.dataset.reaching = "true";
     const crop = pickingCrop;
     const run = handRun;
     const basket = centerOf(harvestBasket);
@@ -1239,6 +1311,7 @@ async function createScene() {
           showHarvestCounts();
           moveHand(hand, run, release, hand.rest, 250, false, () => {
             hand.busy = false;
+            delete harvestScene.dataset.reaching;
             if (!crop.done) return;
             if (crops.every(plant => plant.done)) {
               harvestInstruction.textContent = "三處的春茶都採齊了，小茶簍已經裝滿。";
@@ -1321,43 +1394,92 @@ async function createScene() {
     context.fillRect(0, height * .13, width, height * .41);
   }
 
-  function drawWater() {
-    context.save();
-    context.globalCompositeOperation = "screen";
-    for (const glint of reflections) {
-      const shimmer = (Math.sin(elapsed * 1.9 + glint.phase) + 1) / 2;
-      const x = .351 + glint.x * .35;
-      const y = .257 + glint.y * .066;
-      if (x > .415 && x < .595 && y < .268) continue;
-      if (x < .43 && y > .293) continue;
-      context.fillStyle = color([160, 220, 235], shimmer * (.19 + light.sun * .16));
-      context.fillRect(Math.floor(x * width), Math.floor(y * height), glint.size * (.35 + shimmer), 1 + (glint.y > .7));
-    }
-    for (let index = 0; index < 16; index += 1) {
-      const flow = wrap(elapsed * (.57 + index % 3 * .13) + index * .28);
-      const startX = [.89, .842, .805, .931][index % 4];
-      const startY = [.374, .42, .473, .705][index % 4];
-      const length = [.135, .078, .073, .043][index % 4];
-      context.fillStyle = color([180, 231, 247], Math.sin(flow * Math.PI) * (.14 + light.rain * .14));
-      context.fillRect((startX - flow * .02 + (index % 3) * .008) * width,
-        (startY + flow * length) * height, 3 + index % 5, 4 + index % 8);
-    }
-    for (const [x, y, span] of puddles) {
-      const waterX = x * width;
-      const waterY = y * height;
-      context.save();
-      ellipse(waterX, waterY, span * width, 5 + span * 70);
-      context.clip();
-      for (let strip = -2; strip <= 2; strip += 1) {
-        const pulse = .5 + .5 * Math.sin(elapsed * 2.1 + strip * 1.34 + x * 71);
-        const cool = x > .68;
-        context.fillStyle = color(cool ? [146, 202, 227] : [255, 177, 99],
-          pulse * (.06 + light.rain * .09 + light.lamp * .05));
-        context.fillRect(waterX - span * width * (pulse + .22), waterY + strip * 3, span * width * 2, 1.5);
+  const waterGrid = document.createElement("canvas");
+  waterGrid.width = 480;
+  waterGrid.height = 270;
+  const waterPaint = waterGrid.getContext("2d");
+  const wheelFrames = [];
+  const waterMasks = [
+    [[426, 103], [434, 105], [426, 124], [425, 145], [426, 161], [412, 162], [413, 123], [419, 111]],
+    [[400, 113], [408, 113], [403, 117], [397, 122], [390, 127], [380, 129], [382, 125], [389, 122], [392, 116]],
+    [[371, 144], [379, 146], [390, 146], [395, 155], [410, 158], [437, 164], [443, 170], [432, 170], [411, 165], [392, 163], [375, 157]],
+    [[424, 187], [445, 187], [452, 191], [459, 194], [470, 201], [479, 207], [479, 222], [455, 215], [451, 207], [442, 199], [431, 193]]
+  ];
+  function clipWater(mask) {
+    waterPaint.beginPath();
+    mask.forEach(([x, y], index) => index ? waterPaint.lineTo(x, y) : waterPaint.moveTo(x, y));
+    waterPaint.closePath();
+    waterPaint.clip();
+  }
+
+  function paintWaterFrame(tick) {
+    waterPaint.clearRect(0, 0, 480, 270);
+    const wheelFrame = Math.floor(tick / 6) % 6;
+    if (!wheelFrames[wheelFrame]) {
+      const tile = document.createElement("canvas");
+      tile.width = 31;
+      tile.height = 61;
+      const painter = tile.getContext("2d");
+      const pitch = Math.PI / 6;
+      for (let y = 0; y < 61; y += 1) {
+        for (let x = 0; x < 31; x += 1) {
+          const dx = (x - 27) / 25;
+          const dy = (y - 30) / 29;
+          const radius = Math.hypot(dx, dy);
+          if (radius > .89 || radius < .17 || (x > 27 && y > 29)) continue;
+          const angle = Math.atan2(dy, dx) + wheelFrame * pitch / 6;
+          const spoke = Math.abs(Math.sin(angle * 6)) * radius;
+          painter.fillStyle = spoke < .11 ? "#94552c" : spoke < .17 ? "#593219" :
+            y % 7 === 0 ? "#1b3236" : "#202525";
+          if (radius > .81) painter.fillStyle = (x + y) % 6 < 2 ? "#ad6a35" : "#784225";
+          painter.fillRect(x, y, 1, 1);
+        }
       }
-      context.restore();
+      wheelFrames[wheelFrame] = tile;
     }
-    context.restore();
+    waterPaint.drawImage(wheelFrames[wheelFrame], 424, 95);
+    const streams = [
+      { mask: 0, start: [419, 101], end: [421, 164], length: 60, speed: 4, count: 14, bar: [1, 5] },
+      { mask: 1, start: [392, 110], end: [392, 131], length: 21, speed: 3, count: 15, bar: [1, 4] },
+      { mask: 2, start: [367, 144], end: [441, 169], length: 74, speed: 2, count: 23, bar: [3, 1] },
+      { mask: 3, start: [424, 186], end: [481, 218], length: 57, speed: 1, count: 19, bar: [3, 1] }
+    ];
+    for (const stream of streams) {
+      waterPaint.save();
+      clipWater(waterMasks[stream.mask]);
+      for (let i = 0; i < stream.count; i += 1) {
+        const phase = (tick * stream.speed + i * 11) % stream.length;
+        const t = phase / stream.length;
+        const cross = i * 7 % 17 - 8;
+        const vertical = stream.mask < 2;
+        const x = Math.round(stream.start[0] + (stream.end[0] - stream.start[0]) * t + (vertical ? cross : 0));
+        const y = Math.round(stream.start[1] + (stream.end[1] - stream.start[1]) * t + (vertical ? 0 : cross));
+        waterPaint.fillStyle = phase < 4 || phase > stream.length - 5 ? "#87bed244" :
+          i % 3 ? "#b9e9f2aa" : "#eefbffcc";
+        waterPaint.fillRect(x, y, stream.bar[0], stream.bar[1]);
+      }
+      waterPaint.restore();
+    }
+    for (const [x, y, mask, phase] of [[419, 159, 2, 0], [433, 165, 2, 1], [440, 190, 3, 2]]) {
+      waterPaint.save();
+      clipWater(waterMasks[mask]);
+      const size = (Math.floor(tick / 2) + phase) % 3;
+      waterPaint.fillStyle = "#e1f9fb";
+      waterPaint.fillRect(x - size, y - size, 1, 1);
+      waterPaint.fillRect(x + size + 1, y - size + 1, 1, 1);
+      waterPaint.restore();
+    }
+  }
+
+  let lastWaterTick = -1;
+  function drawWater() {
+    const tick = Math.floor(elapsed * 6);
+    if (tick !== lastWaterTick) {
+      paintWaterFrame(tick);
+      lastWaterTick = tick;
+    }
+    context.imageSmoothingEnabled = false;
+    context.drawImage(waterGrid, 0, 0, width, height);
   }
 
   function drawLighting() {
@@ -1392,8 +1514,6 @@ async function createScene() {
   function drawHero() {
     const x = width * actor.x;
     const y = height * actor.y;
-    const actorHeight = height * .128;
-    const actorWidth = actorHeight * 405 / 655;
     context.save();
     context.translate(x + 13, y + 2);
     context.rotate(.11);
@@ -1404,43 +1524,21 @@ async function createScene() {
     ellipse(-12, 0, 16, 4);
     context.fill();
     context.restore();
+    const direction = actor.facing === "back" ? 1 : actor.facing === "front" ? 2 : 0;
+    const sprite = playerSheets[direction];
+    const walking = effect?.kind === "walk";
+    const seconds = (effect?.animationMs ?? 0) / 1000;
+    const frame = walking ? Math.floor(seconds * playerArt.framesPerSecond) % playerArt.frameCount : playerArt.idleFrame;
+    const transform = heroContext.getTransform();
+    const scale = Math.max(1, Math.round(heroLayer.height / 400));
+    const footX = Math.round(x * transform.a + transform.e);
+    const footY = Math.round(y * transform.d + transform.f);
+    const bob = !sprite && walking ? 2 * (frame % 2) : 0;
     heroContext.save();
-    heroContext.imageSmoothingEnabled = true;
-    heroContext.filter = `brightness(${(.81 + light.sun * .18 + light.lamp * .035).toFixed(3)}) saturate(.86)`;
-    heroContext.translate(Math.round(x), Math.round(y));
-    if (effect?.kind === "walk" && (actor.facing === "left" || actor.facing === "right")) {
-      const frame = Math.floor((effect.distance ?? 0) / 24) % walkFrames.length;
-      const walkingWidth = actorHeight * 335 / 637;
-      if (actor.facing === "left") heroContext.scale(-1, 1);
-      heroContext.drawImage(stage === "garden" ? hatWalkSheet : walkSheet,
-        walkFrames[frame], 38, 335, 637, -walkingWidth / 2, -actorHeight, walkingWidth, actorHeight);
-    } else if (stage === "garden") {
-      drawStanding(hatBack, 0, 0, hatBack.width, hatBack.height);
-    } else if (movedInVillage) {
-      const sourceX = actor.facing === "back" ? 1545 : actor.facing === "front" ? 267 : 906;
-      if (actor.facing === "right") heroContext.scale(-1, 1);
-      drawStanding(fieldHero, sourceX, 40, 360, 650);
-    } else {
-      heroContext.drawImage(hero, 414, 375, 405, 655, -actorWidth / 2, -actorHeight, actorWidth, actorHeight);
-    }
-    function drawStanding(sheet, sx, sy, sw, sh) {
-      const w = actorHeight * sw / sh;
-      if (effect?.kind !== "walk") {
-        heroContext.drawImage(sheet, sx, sy, sw, sh, -w / 2, -actorHeight, w, actorHeight);
-        return;
-      }
-      const stride = Math.sin((effect.distance ?? 0) / 14);
-      const hip = Math.round(sh * .76);
-      const torso = actorHeight * hip / sh;
-      const legs = actorHeight - torso;
-      const left = Math.floor(sw / 2);
-      const leftWidth = w * left / sw;
-      heroContext.drawImage(sheet, sx, sy, sw, hip, -w / 2, -actorHeight, w, torso);
-      heroContext.drawImage(sheet, sx, sy + hip, left, sh - hip,
-        -w / 2, -legs, leftWidth, legs * (1 - Math.max(0, stride) * .22));
-      heroContext.drawImage(sheet, sx + left, sy + hip, sw - left, sh - hip,
-        -w / 2 + leftWidth, -legs, w - leftWidth, legs * (1 - Math.max(0, -stride) * .22));
-    }
+    heroContext.setTransform(actor.facing === "right" ? -scale : scale, 0, 0, scale, footX, footY - bob);
+    heroContext.imageSmoothingEnabled = false;
+    heroContext.drawImage(sprite ?? playerBase, sprite ? frame * playerArt.width : 0, 0, playerArt.width, playerArt.height,
+      -playerArt.anchor[0], -playerArt.anchor[1], playerArt.width, playerArt.height);
     heroContext.restore();
   }
 
@@ -1579,6 +1677,17 @@ async function createScene() {
       button.style.left = `${x / viewportWidth * 100}%`;
       button.style.top = `${y / viewportHeight * 100}%`;
     });
+    const first = stage === "garden" && markerButtons.find(button => !button.hidden);
+    gardenGuide.hidden = stage !== "garden" || busy || crops.every(crop => crop.done);
+    if (!gardenGuide.hidden && !gardenGuide.textContent) {
+      gardenGuide.textContent = "點亮框茶株走近，再點嫩梢採摘。";
+    }
+    if (stage === "garden") {
+      for (const button of markerButtons) {
+        button.dataset.guide = button === first && !busy ? "active" : "pending";
+      }
+    }
+
   }
 
   function resize() {
@@ -1605,6 +1714,7 @@ async function createScene() {
     const tween = activeTween;
     if (tween) {
       tween.start ??= time;
+      if (effect?.kind === "walk") effect.animationMs = time - tween.start;
       const fraction = accessibility.matches ? 1 : Math.min(1, (time - tween.start) / tween.duration);
       tween.draw(fraction);
       if (fraction === 1) {
@@ -1700,8 +1810,131 @@ async function createScene() {
     if (x >= .09 && x <= .89 && y >= .727 && y <= .805) walkVillage({ x, y });
   });
   addEventListener("resize", resize);
+  function installSceneDeveloperTools() {
+    const query = new URLSearchParams(location.search);
+    const local = location.protocol === "file:" ||
+      ["localhost", "127.0.0.1", "[::1]"].includes(location.hostname);
+    if (!local && query.get("dev") !== "1") return;
+
+    const dev = document.createElement("aside");
+    dev.className = "scene-dev";
+    dev.hidden = true;
+    dev.innerHTML = `<strong>開發跳轉</strong>
+      <label>場景 <select data-dev="scene"></select></label>
+      <label>步驟 <select data-dev="step"></select></label>
+      <label>已採茶葉 <input data-dev="leaves" type="number" min="0" max="18" value="0"></label>
+      <label>紀念幣 <input data-dev="coins" type="number" min="0" max="1" value="0"></label>
+      <label>語言 <select data-dev="lang"><option>zh-Hant</option><option>en</option></select></label>
+      <button type="button" data-dev="jump">跳過去</button>
+      <button type="button" data-dev="reset">重設全部</button>`;
+    document.body.append(dev);
+    const field = name => dev.querySelector(`[data-dev="${name}"]`);
+    const scene = field("scene"), step = field("step");
+    for (const name of Object.keys(devScenes)) scene.add(new Option(name, name));
+
+    function showSteps() {
+      step.replaceChildren();
+      for (const [id, config] of Object.entries(devScenes[scene.value])) step.add(new Option(config.label, id));
+    }
+    function showDefaults() {
+      const config = devScenes[scene.value][step.value];
+      field("leaves").value = config.leaves;
+      field("coins").value = config.coins ?? 0;
+    }
+    scene.addEventListener("change", () => { showSteps(); showDefaults(); });
+    step.addEventListener("change", showDefaults);
+    showSteps();
+    showDefaults();
+
+    let jumping = false;
+    async function jump(sceneName, stepName, useControls = false) {
+      const config = Object.hasOwn(devScenes, sceneName) && Object.hasOwn(devScenes[sceneName], stepName)
+        ? devScenes[sceneName][stepName] : null;
+      if (!config || jumping) return;
+      jumping = true;
+      try {
+        activeTween = undefined;
+        document.body.append(dev);
+        for (const dialog of [harvest, teaBench, coinAward]) {
+          if (!dialog.open) continue;
+          await new Promise(resolve => {
+            dialog.addEventListener("close", resolve, { once: true });
+            dialog.close();
+          });
+        }
+        clearTimeout(teaTimer);
+        busy = false;
+        effect = undefined;
+        replay = undefined;
+        const bounded = (name, min, max) => Math.min(max, Math.max(min,
+          useControls ? Math.trunc(Number(field(name).value)) || 0 : 0));
+        const count = bounded("leaves", config.leaves, crops.length * shoots.length);
+        choices = bounded("coins", config.coins ?? 0, 1) ? [0] : [];
+        Object.assign(tea, { phase: config.phase ?? "leaves",
+          readyAt: config.phase === "steep" ? Date.now() + 6500 : 0 });
+        intro();
+        crops.forEach((crop, index) => {
+          const names = shoots.slice(0, Math.max(0, count - index * shoots.length))
+            .map(shoot => shoot.dataset.object);
+          crop.shoots = new Set(names);
+          crop.done = names.length === shoots.length;
+        });
+        updateBooks();
+        if (sceneName === "tea-garden") {
+          openGarden();
+          if (stepName === "pick") {
+            const crop = crops.find(plant => !plant.done);
+            if (crop) openHarvest(crop);
+          }
+          if (stepName === "return") showGardenPanel("春茶採好了。回去找阿嬤吧。");
+        } else if (sceneName === "tea-room") {
+          returnHome();
+          openTea();
+        } else if (sceneName === "chapter-end") {
+          if (stepName === "story") showStoryBook();
+          else if (stepName === "coins") showCoinBook();
+          else {
+            stage = "complete";
+            showEnding();
+            if (stepName === "award") coinAward.showModal();
+          }
+        }
+        scene.value = sceneName;
+        showSteps();
+        step.value = stepName;
+        field("leaves").value = count;
+        field("coins").value = choices.length;
+      } finally {
+        jumping = false;
+      }
+    }
+    field("jump").addEventListener("click", () => { dev.hidden = true; void jump(scene.value, step.value, true); });
+    field("reset").addEventListener("click", () => {
+      field("lang").value = "zh-Hant";
+      field("lang").dispatchEvent(new Event("change"));
+      void jump("village", "intro");
+    });
+    field("lang").addEventListener("change", event => {
+      const english = event.target.value === "en";
+      dev.lang = event.target.value;
+      dev.querySelector("strong").textContent = english ? "Scene debugger" : "開發跳轉";
+      field("jump").textContent = english ? "Jump" : "跳過去";
+      field("reset").textContent = english ? "Reset" : "重設全部";
+    });
+    document.addEventListener("keydown", event => {
+      if (event.shiftKey && event.code === "KeyD" && !event.repeat) {
+        event.preventDefault();
+        const opening = dev.hidden;
+        if (opening) (document.querySelector("dialog[open]") ?? document.body).append(dev);
+        dev.hidden = !opening;
+      }
+    });
+    if (query.has("scene") && query.has("step")) void jump(query.get("scene"), query.get("step"));
+  }
+
   resize();
   status.textContent = "";
   resumeGame();
+  installSceneDeveloperTools();
   setPaused(paused);
 }
